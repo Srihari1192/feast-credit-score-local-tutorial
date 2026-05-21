@@ -56,9 +56,13 @@ for _i in range(500):
     )
 
 # ── 120 Feature Services ──────────────────────────────────────────────────────
-# Distribute 500 FVs across 120 services (4 FVs each, cycling through all 500).
+# Distribute all 500 FVs across 120 services ensuring full coverage.
+# 500 = 20 services × 5 FVs + 100 services × 4 FVs → every FV appears in exactly 1 service.
+_fv_cursor = 0
 for _i in range(120):
-    _indices = [(_i * 4 + _j) % 500 for _j in range(4)]
+    _count = 5 if _i < 20 else 4  # first 20 get 5 FVs, rest get 4
+    _indices = [(_fv_cursor + _j) % 500 for _j in range(_count)]
+    _fv_cursor = (_fv_cursor + _count) % 500
     _fvs = [globals()[f"fv_{_idx}"] for _idx in _indices]
     globals()[f"feature_service_{_i}"] = FeatureService(
         name=f"feature_service_{_i}",
