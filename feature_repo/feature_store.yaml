@@ -1,15 +1,6 @@
-project: credit_scoring_local
-registry: 
+project: my_project
+registry:
     path: registry.db
     cache_ttl_seconds: 60
 provider: local
-online_store:
-    type: redis
-    connection_string: "localhost:6379"
-offline_store:
-    type: dask
 entity_key_serialization_version: 3
-go_feature_serving: true
-feature_server:
-    type: local
-    transformation_service_endpoint: "localhost:6569"
