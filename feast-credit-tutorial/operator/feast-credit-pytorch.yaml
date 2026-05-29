@@ -1,0 +1,132 @@
+# Feast Operator CR — PyTorch Credit Scoring
+# Deploys a FeatureStore instance backed by Redis (online) + Parquet/Dask (offline)
+# Used with the feast-pytorch-credit-scoring.ipynb notebook
+#
+# Prerequisites:
+#   kubectl create secret generic redis-secret --from-literal=connection_string=redis:6379
+#   kubectl apply -f feast-credit-pytorch.yaml
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-secret
+  namespace: feast-pytorch-credit
+stringData:
+  redis: |
+    type: redis
+    connection_string: "redis-service:6379"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: feast-pytorch-pvc
+  namespace: feast-pytorch-credit
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: feast.dev/v1alpha1
+kind: FeatureStore
+metadata:
+  name: credit-pytorch
+  namespace: feast-pytorch-credit
+  labels:
+    app: credit-scoring
+    framework: pytorch
+    feature-store-ui: enabled
+spec:
+  feastProject: credit_scoring_pytorch
+
+  # Git-based feature repository — points to the PyTorch branch
+  feastProjectDir:
+    git:
+      url: https://github.com/Srihari1192/feast-credit-score-local-tutorial
+      ref: feast-ml-frameworks
+
+  services:
+    # Offline store — Dask file-based (Parquet)
+    offlineStore:
+      server: {}
+
+    # Online store — Redis for low-latency PyTorch inference
+    onlineStore:
+      persistence:
+        store:
+          type: redis
+          secretRef:
+            name: redis-secret
+      server:
+        envFrom:
+          - secretRef:
+              name: redis-secret
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+
+    # Registry — local file persisted on PVC
+    registry:
+      local:
+        persistence:
+          file:
+            path: /feast-data/registry.db
+            pvc:
+              ref: feast-pytorch-pvc
+              mountPath: /feast-data
+        server:
+          restAPI: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+
+    # Feature Store UI
+    ui:
+      server: {}
+---
+# Redis deployment for online store
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: feast-pytorch-credit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: feast-pytorch-credit
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379

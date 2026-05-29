@@ -1,0 +1,195 @@
+# Feast Operator CR — LLM Credit Explanation
+# Deploys a FeatureStore with Ollama sidecar for local LLM inference
+# Pairs with feast-llm-credit-explanation.ipynb
+#
+# Architecture:
+#   Feast Online Store (Redis) → Features → Ollama LLM → Explanation
+#
+# To use OpenAI instead of Ollama, remove the ollama deployment
+# and set OPENAI_API_KEY in the llm-secret.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llm-secret
+  namespace: feast-llm-credit
+stringData:
+  OPENAI_API_KEY: "sk-replace-me-or-use-ollama"
+  OLLAMA_BASE_URL: "http://ollama-service:11434/v1"
+  redis: |
+    type: redis
+    connection_string: "redis-llm-service:6379"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: feast-llm-pvc
+  namespace: feast-llm-credit
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models-pvc
+  namespace: feast-llm-credit
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: feast.dev/v1alpha1
+kind: FeatureStore
+metadata:
+  name: credit-llm
+  namespace: feast-llm-credit
+  labels:
+    app: credit-llm-advisor
+    framework: llm
+    feature-store-ui: enabled
+spec:
+  feastProject: credit_scoring_llm
+
+  feastProjectDir:
+    git:
+      url: https://github.com/Srihari1192/feast-credit-score-local-tutorial
+      ref: feast-ml-frameworks
+
+  services:
+    offlineStore:
+      server: {}
+
+    # Online store — Redis (features retrieved at LLM prompt time)
+    onlineStore:
+      persistence:
+        store:
+          type: redis
+          secretRef:
+            name: llm-secret
+      server:
+        envFrom:
+          - secretRef:
+              name: llm-secret
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+
+    # Registry — file on PVC
+    registry:
+      local:
+        persistence:
+          file:
+            path: /feast-data/registry.db
+            pvc:
+              ref: feast-llm-pvc
+              mountPath: /feast-data
+        server:
+          restAPI: true
+
+    ui:
+      server: {}
+---
+# Ollama — local LLM server (llama3 / mistral)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: feast-llm-credit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      initContainers:
+        # Pull model on first start
+        - name: pull-model
+          image: ollama/ollama:latest
+          command: ["ollama", "pull", "llama3.2:1b"]
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0"
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0"
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+          resources:
+            requests:
+              cpu: "1"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-service
+  namespace: feast-llm-credit
+spec:
+  selector:
+    app: ollama
+  ports:
+    - port: 11434
+      targetPort: 11434
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-llm
+  namespace: feast-llm-credit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-llm
+  template:
+    metadata:
+      labels:
+        app: redis-llm
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-llm-service
+  namespace: feast-llm-credit
+spec:
+  selector:
+    app: redis-llm
+  ports:
+    - port: 6379
+      targetPort: 6379

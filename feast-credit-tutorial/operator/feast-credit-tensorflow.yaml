@@ -1,0 +1,168 @@
+# Feast Operator CR — TensorFlow Credit Scoring
+# Deploys a FeatureStore with PostgreSQL registry and Redis online store
+# Pairs with feast-tensorflow-credit-scoring.ipynb
+#
+# Prerequisites:
+#   kubectl create secret generic pg-secret \
+#     --from-literal=host=postgres-service \
+#     --from-literal=port=5432 \
+#     --from-literal=database=feast \
+#     --from-literal=db_user=feast \
+#     --from-literal=db_password=feastpassword
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pg-secret
+  namespace: feast-tf-credit
+stringData:
+  DB_HOST:     "postgres-service"
+  DB_PORT:     "5432"
+  DB_NAME:     "feast"
+  DB_USER:     "feast"
+  DB_PASSWORD: "feastpassword"
+  redis: |
+    type: redis
+    connection_string: "redis-tf-service:6379"
+---
+apiVersion: feast.dev/v1alpha1
+kind: FeatureStore
+metadata:
+  name: credit-tensorflow
+  namespace: feast-tf-credit
+  labels:
+    app: credit-scoring
+    framework: tensorflow
+    feature-store-ui: enabled
+spec:
+  feastProject: credit_scoring_tensorflow
+
+  feastProjectDir:
+    git:
+      url: https://github.com/Srihari1192/feast-credit-score-local-tutorial
+      ref: feast-ml-frameworks
+
+  services:
+    offlineStore:
+      server: {}
+
+    # Online store — Redis
+    onlineStore:
+      persistence:
+        store:
+          type: redis
+          secretRef:
+            name: pg-secret
+      server:
+        envFrom:
+          - secretRef:
+              name: pg-secret
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+
+    # Registry — PostgreSQL for production-grade durability
+    registry:
+      local:
+        persistence:
+          store:
+            type: sql
+            secretRef:
+              name: pg-secret
+        server:
+          restAPI: true
+          envFrom:
+            - secretRef:
+                name: pg-secret
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+
+    ui:
+      server: {}
+---
+# PostgreSQL for Feast registry
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: feast-tf-credit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          env:
+            - name: POSTGRES_DB
+              value: feast
+            - name: POSTGRES_USER
+              value: feast
+            - name: POSTGRES_PASSWORD
+              value: feastpassword
+          ports:
+            - containerPort: 5432
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: feast-tf-credit
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-tf
+  namespace: feast-tf-credit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-tf
+  template:
+    metadata:
+      labels:
+        app: redis-tf
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-tf-service
+  namespace: feast-tf-credit
+spec:
+  selector:
+    app: redis-tf
+  ports:
+    - port: 6379
+      targetPort: 6379
